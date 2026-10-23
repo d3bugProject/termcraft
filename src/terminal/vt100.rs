@@ -40,6 +40,7 @@ impl Vt100Parser {
                     screen.carriage_return();
                 }
                 '\n' => {
+                    screen.carriage_return();
                     screen.newline();
                 }
                 '\t' => {
@@ -51,7 +52,7 @@ impl Vt100Parser {
                     screen.backspace();
                 }
                 '\x07' => {
-                    // Cloche sonore (Bell)
+                    // Bell
                 }
                 other => {
                     screen.write_char(other);
@@ -71,6 +72,28 @@ impl Vt100Parser {
                     // Reset terminal
                     screen.clear_screen();
                     screen.reset_styles();
+                    self.state = ParserState::Normal;
+                }
+                '7' => {
+                    screen.save_cursor();
+                    self.state = ParserState::Normal;
+                }
+                '8' => {
+                    screen.restore_cursor();
+                    self.state = ParserState::Normal;
+                }
+                'M' => {
+                    // Reverse index (scroll down if at top)
+                    if screen.cursor_y > screen.scroll_top {
+                        screen.cursor_y -= 1;
+                    } else {
+                        screen.scroll_down(1);
+                    }
+                    self.state = ParserState::Normal;
+                }
+                'E' => {
+                    screen.carriage_return();
+                    screen.newline();
                     self.state = ParserState::Normal;
                 }
                 _ => {
@@ -99,11 +122,35 @@ impl Vt100Parser {
     }
 
     fn dispatch_csi(&self, cmd: char, screen: &mut Screen, palette: &ColorPalette) {
-        let params: Vec<u32> = self
-            .params_buffer
+        let is_private = self.params_buffer.starts_with('?');
+        let clean_params = if is_private {
+            &self.params_buffer[1..]
+        } else {
+            &self.params_buffer
+        };
+
+        let params: Vec<u32> = clean_params
             .split(';')
             .filter_map(|s| s.parse().ok())
             .collect();
+
+        if is_private {
+            let mode = params.first().copied().unwrap_or(0);
+            match cmd {
+                'h' => match mode {
+                    25 => screen.cursor_visible = true,
+                    1049 | 47 => screen.enter_alternate_screen(),
+                    _ => {}
+                },
+                'l' => match mode {
+                    25 => screen.cursor_visible = false,
+                    1049 | 47 => screen.leave_alternate_screen(),
+                    _ => {}
+                },
+                _ => {}
+            }
+            return;
+        }
 
         match cmd {
             'm' => self.handle_sgr(&params, screen, palette),
@@ -113,39 +160,78 @@ impl Vt100Parser {
                 screen.set_cursor(col, row);
             }
             'A' => {
-                let count = params.first().copied().unwrap_or(1) as usize;
+                let count = params.first().copied().unwrap_or(1).max(1) as usize;
                 screen.cursor_y = screen.cursor_y.saturating_sub(count);
             }
             'B' => {
-                let count = params.first().copied().unwrap_or(1) as usize;
+                let count = params.first().copied().unwrap_or(1).max(1) as usize;
                 screen.cursor_y = (screen.cursor_y + count).min(screen.rows.saturating_sub(1));
             }
             'C' => {
-                let count = params.first().copied().unwrap_or(1) as usize;
+                let count = params.first().copied().unwrap_or(1).max(1) as usize;
                 screen.cursor_x = (screen.cursor_x + count).min(screen.cols.saturating_sub(1));
             }
             'D' => {
-                let count = params.first().copied().unwrap_or(1) as usize;
+                let count = params.first().copied().unwrap_or(1).max(1) as usize;
                 screen.cursor_x = screen.cursor_x.saturating_sub(count);
+            }
+            'G' | '`' => {
+                let col = params.first().copied().unwrap_or(1).saturating_sub(1) as usize;
+                screen.cursor_x = col.min(screen.cols.saturating_sub(1));
+            }
+            'd' => {
+                let row = params.first().copied().unwrap_or(1).saturating_sub(1) as usize;
+                screen.cursor_y = row.min(screen.rows.saturating_sub(1));
             }
             'J' => {
                 let mode = params.first().copied().unwrap_or(0);
-                if mode == 2 || mode == 3 {
-                    screen.clear_screen();
+                match mode {
+                    0 => screen.clear_to_end_of_screen(),
+                    1 => screen.clear_from_start_of_screen(),
+                    2 | 3 => screen.clear_screen(),
+                    _ => {}
                 }
             }
             'K' => {
-                screen.clear_to_end_of_line();
-            }
-            'h' => {
-                if self.params_buffer == "?25" {
-                    screen.cursor_visible = true;
+                let mode = params.first().copied().unwrap_or(0);
+                match mode {
+                    0 => screen.clear_to_end_of_line(),
+                    1 => screen.clear_from_start_of_line(),
+                    2 => screen.clear_line(),
+                    _ => {}
                 }
             }
-            'l' => {
-                if self.params_buffer == "?25" {
-                    screen.cursor_visible = false;
-                }
+            'X' => {
+                let count = params.first().copied().unwrap_or(1).max(1) as usize;
+                screen.erase_chars(count);
+            }
+            'P' => {
+                let count = params.first().copied().unwrap_or(1).max(1) as usize;
+                screen.delete_chars(count);
+            }
+            '@' => {
+                let count = params.first().copied().unwrap_or(1).max(1) as usize;
+                screen.insert_chars(count);
+            }
+            'L' => {
+                let count = params.first().copied().unwrap_or(1).max(1) as usize;
+                screen.insert_lines(count);
+            }
+            'M' => {
+                let count = params.first().copied().unwrap_or(1).max(1) as usize;
+                screen.delete_lines(count);
+            }
+            'r' => {
+                let top = params.first().copied().unwrap_or(1).saturating_sub(1) as usize;
+                let bottom = params.get(1).copied().unwrap_or(screen.rows as u32).saturating_sub(1) as usize;
+                screen.set_margins(top, bottom);
+                screen.set_cursor(0, 0);
+            }
+            's' => {
+                screen.save_cursor();
+            }
+            'u' => {
+                screen.restore_cursor();
             }
             _ => {}
         }

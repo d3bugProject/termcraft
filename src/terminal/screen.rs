@@ -21,6 +21,12 @@ pub struct Screen {
     pub scrollback: Vec<Vec<Cell>>,
     pub max_scrollback_lines: usize,
     pub title: String,
+
+    // Buffer alternatif pour applications plein écran (ex: nvim, less, top)
+    pub alt_grid: Option<Vec<Vec<Cell>>>,
+    pub saved_cursor: (usize, usize),
+    pub scroll_top: usize,
+    pub scroll_bottom: usize,
 }
 
 impl Screen {
@@ -49,6 +55,29 @@ impl Screen {
             scrollback: Vec::new(),
             max_scrollback_lines: 10_000,
             title: "TermCraft".to_string(),
+            alt_grid: None,
+            saved_cursor: (0, 0),
+            scroll_top: 0,
+            scroll_bottom: rows.saturating_sub(1),
+        }
+    }
+
+    pub fn enter_alternate_screen(&mut self) {
+        if self.alt_grid.is_none() {
+            let alt = vec![vec![Cell::default_blank(self.default_fg, self.default_bg); self.cols]; self.rows];
+            let normal = std::mem::replace(&mut self.grid, alt);
+            self.alt_grid = Some(normal);
+            self.saved_cursor = (self.cursor_x, self.cursor_y);
+            self.cursor_x = 0;
+            self.cursor_y = 0;
+        }
+    }
+
+    pub fn leave_alternate_screen(&mut self) {
+        if let Some(normal) = self.alt_grid.take() {
+            self.grid = normal;
+            self.cursor_x = self.saved_cursor.0.min(self.cols.saturating_sub(1));
+            self.cursor_y = self.saved_cursor.1.min(self.rows.saturating_sub(1));
         }
     }
 
@@ -72,16 +101,42 @@ impl Screen {
     }
 
     pub fn newline(&mut self) {
-        if self.cursor_y + 1 < self.rows {
+        if self.cursor_y < self.scroll_bottom {
             self.cursor_y += 1;
         } else {
-            // Défilement vers le haut : envoi de la ligne supérieure dans le scrollback
-            let top_line = self.grid.remove(0);
-            self.scrollback.push(top_line);
-            if self.scrollback.len() > self.max_scrollback_lines {
-                self.scrollback.remove(0);
+            // Scroll down within scroll region
+            self.scroll_up(1);
+        }
+    }
+
+    pub fn scroll_up(&mut self, count: usize) {
+        for _ in 0..count {
+            if self.scroll_top < self.scroll_bottom && self.scroll_bottom < self.rows {
+                let removed = self.grid.remove(self.scroll_top);
+                // Si on n'est pas dans l'écran alternatif, sauvegarder dans le scrollback
+                if self.alt_grid.is_none() && self.scroll_top == 0 {
+                    self.scrollback.push(removed);
+                    if self.scrollback.len() > self.max_scrollback_lines {
+                        self.scrollback.remove(0);
+                    }
+                }
+                self.grid.insert(
+                    self.scroll_bottom,
+                    vec![Cell::default_blank(self.default_fg, self.default_bg); self.cols],
+                );
             }
-            self.grid.push(vec![Cell::default_blank(self.default_fg, self.default_bg); self.cols]);
+        }
+    }
+
+    pub fn scroll_down(&mut self, count: usize) {
+        for _ in 0..count {
+            if self.scroll_top < self.scroll_bottom && self.scroll_bottom < self.rows {
+                self.grid.remove(self.scroll_bottom);
+                self.grid.insert(
+                    self.scroll_top,
+                    vec![Cell::default_blank(self.default_fg, self.default_bg); self.cols],
+                );
+            }
         }
     }
 
@@ -126,6 +181,103 @@ impl Screen {
         }
     }
 
+    pub fn clear_from_start_of_line(&mut self) {
+        if self.cursor_y < self.rows {
+            let end = (self.cursor_x + 1).min(self.cols);
+            for col in 0..end {
+                self.grid[self.cursor_y][col] = Cell::default_blank(self.default_fg, self.default_bg);
+            }
+        }
+    }
+
+    pub fn clear_to_end_of_screen(&mut self) {
+        self.clear_to_end_of_line();
+        for r in (self.cursor_y + 1)..self.rows {
+            for c in 0..self.cols {
+                self.grid[r][c] = Cell::default_blank(self.default_fg, self.default_bg);
+            }
+        }
+    }
+
+    pub fn clear_from_start_of_screen(&mut self) {
+        for r in 0..self.cursor_y {
+            for c in 0..self.cols {
+                self.grid[r][c] = Cell::default_blank(self.default_fg, self.default_bg);
+            }
+        }
+        self.clear_from_start_of_line();
+    }
+
+    pub fn erase_chars(&mut self, count: usize) {
+        if self.cursor_y < self.rows {
+            let end = (self.cursor_x + count).min(self.cols);
+            for col in self.cursor_x..end {
+                self.grid[self.cursor_y][col] = Cell::default_blank(self.default_fg, self.default_bg);
+            }
+        }
+    }
+
+    pub fn delete_chars(&mut self, count: usize) {
+        if self.cursor_y < self.rows && self.cursor_x < self.cols {
+            let row = &mut self.grid[self.cursor_y];
+            for _ in 0..count {
+                if self.cursor_x < row.len() {
+                    row.remove(self.cursor_x);
+                    row.push(Cell::default_blank(self.default_fg, self.default_bg));
+                }
+            }
+        }
+    }
+
+    pub fn insert_chars(&mut self, count: usize) {
+        if self.cursor_y < self.rows && self.cursor_x < self.cols {
+            let row = &mut self.grid[self.cursor_y];
+            for _ in 0..count {
+                row.insert(self.cursor_x, Cell::default_blank(self.default_fg, self.default_bg));
+                row.pop();
+            }
+        }
+    }
+
+    pub fn insert_lines(&mut self, count: usize) {
+        if self.cursor_y <= self.scroll_bottom {
+            let old_top = self.scroll_top;
+            self.scroll_top = self.cursor_y;
+            self.scroll_down(count);
+            self.scroll_top = old_top;
+        }
+    }
+
+    pub fn delete_lines(&mut self, count: usize) {
+        if self.cursor_y <= self.scroll_bottom {
+            let old_top = self.scroll_top;
+            self.scroll_top = self.cursor_y;
+            self.scroll_up(count);
+            self.scroll_top = old_top;
+        }
+    }
+
+    pub fn set_margins(&mut self, top: usize, bottom: usize) {
+        let t = top.min(self.rows.saturating_sub(1));
+        let b = bottom.min(self.rows.saturating_sub(1));
+        if t < b {
+            self.scroll_top = t;
+            self.scroll_bottom = b;
+        } else {
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows.saturating_sub(1);
+        }
+    }
+
+    pub fn save_cursor(&mut self) {
+        self.saved_cursor = (self.cursor_x, self.cursor_y);
+    }
+
+    pub fn restore_cursor(&mut self) {
+        self.cursor_x = self.saved_cursor.0.min(self.cols.saturating_sub(1));
+        self.cursor_y = self.saved_cursor.1.min(self.rows.saturating_sub(1));
+    }
+
     pub fn reset_styles(&mut self) {
         self.current_fg = self.default_fg;
         self.current_bg = self.default_bg;
@@ -155,6 +307,8 @@ impl Screen {
         self.grid = new_grid;
         self.cols = new_cols;
         self.rows = new_rows;
+        self.scroll_top = 0;
+        self.scroll_bottom = new_rows.saturating_sub(1);
         self.cursor_x = self.cursor_x.min(new_cols.saturating_sub(1));
         self.cursor_y = self.cursor_y.min(new_rows.saturating_sub(1));
     }
