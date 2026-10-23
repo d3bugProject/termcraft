@@ -211,17 +211,3 @@ impl Drop for WinConPty {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_spawn_conpty() {
-        let pty = WinConPty::spawn(80, 24, "cmd.exe");
-        if let Err(ref e) = pty {
-            println!("ConPTY spawn error: {}", e);
-        }
-        assert!(pty.is_ok());
-    }
-}

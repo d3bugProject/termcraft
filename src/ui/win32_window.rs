@@ -107,7 +107,15 @@ pub mod native {
             SetTimer(hwnd, 1, 16, None);
 
             let mut msg = std::mem::zeroed();
-            while GetMessageW(&mut msg, 0, 0, 0) > 0 {
+            loop {
+                let res = GetMessageW(&mut msg, 0, 0, 0);
+                if res <= 0 {
+                    let _ = std::fs::write(
+                        "C:\\Users\\mnagency\\Desktop\\termcraft\\getmessage.log",
+                        format!("GetMessage returned: {}, last error: {}\n", res, GetLastError()),
+                    );
+                    break;
+                }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -169,6 +177,19 @@ pub mod native {
     }
 
     unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            wnd_proc_inner(hwnd, msg, wparam, lparam)
+        }));
+        match res {
+            Ok(ret) => ret,
+            Err(e) => {
+                let _ = std::fs::write("C:\\Users\\mnagency\\Desktop\\termcraft\\panic_wndproc.log", format!("{:?}\n", e));
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+        }
+    }
+
+    unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         match msg {
             WM_TIMER => {
                 let mut need_redraw = false;

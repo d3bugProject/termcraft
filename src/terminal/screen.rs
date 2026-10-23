@@ -31,6 +31,8 @@ pub struct Screen {
 
 impl Screen {
     pub fn new(cols: usize, rows: usize, default_fg: RgbColor, default_bg: RgbColor) -> Self {
+        let cols = cols.max(1);
+        let rows = rows.max(1);
         let mut grid = Vec::with_capacity(rows);
         for _ in 0..rows {
             grid.push(vec![Cell::default_blank(default_fg, default_bg); cols]);
@@ -104,16 +106,14 @@ impl Screen {
         if self.cursor_y < self.scroll_bottom {
             self.cursor_y += 1;
         } else {
-            // Scroll down within scroll region
             self.scroll_up(1);
         }
     }
 
     pub fn scroll_up(&mut self, count: usize) {
         for _ in 0..count {
-            if self.scroll_top < self.scroll_bottom && self.scroll_bottom < self.rows {
+            if self.scroll_top < self.scroll_bottom && self.scroll_bottom < self.grid.len() {
                 let removed = self.grid.remove(self.scroll_top);
-                // Si on n'est pas dans l'écran alternatif, sauvegarder dans le scrollback
                 if self.alt_grid.is_none() && self.scroll_top == 0 {
                     self.scrollback.push(removed);
                     if self.scrollback.len() > self.max_scrollback_lines {
@@ -130,7 +130,7 @@ impl Screen {
 
     pub fn scroll_down(&mut self, count: usize) {
         for _ in 0..count {
-            if self.scroll_top < self.scroll_bottom && self.scroll_bottom < self.rows {
+            if self.scroll_top < self.scroll_bottom && self.scroll_bottom < self.grid.len() {
                 self.grid.remove(self.scroll_bottom);
                 self.grid.insert(
                     self.scroll_top,
@@ -174,7 +174,7 @@ impl Screen {
     }
 
     pub fn clear_to_end_of_line(&mut self) {
-        if self.cursor_y < self.rows {
+        if self.cursor_y < self.rows && self.cursor_x < self.cols {
             for col in self.cursor_x..self.cols {
                 self.grid[self.cursor_y][col] = Cell::default_blank(self.default_fg, self.default_bg);
             }
@@ -192,15 +192,18 @@ impl Screen {
 
     pub fn clear_to_end_of_screen(&mut self) {
         self.clear_to_end_of_line();
-        for r in (self.cursor_y + 1)..self.rows {
-            for c in 0..self.cols {
-                self.grid[r][c] = Cell::default_blank(self.default_fg, self.default_bg);
+        if self.cursor_y + 1 < self.rows {
+            for r in (self.cursor_y + 1)..self.rows {
+                for c in 0..self.cols {
+                    self.grid[r][c] = Cell::default_blank(self.default_fg, self.default_bg);
+                }
             }
         }
     }
 
     pub fn clear_from_start_of_screen(&mut self) {
-        for r in 0..self.cursor_y {
+        let max_r = self.cursor_y.min(self.rows);
+        for r in 0..max_r {
             for c in 0..self.cols {
                 self.grid[r][c] = Cell::default_blank(self.default_fg, self.default_bg);
             }
@@ -209,7 +212,7 @@ impl Screen {
     }
 
     pub fn erase_chars(&mut self, count: usize) {
-        if self.cursor_y < self.rows {
+        if self.cursor_y < self.rows && self.cursor_x < self.cols {
             let end = (self.cursor_x + count).min(self.cols);
             for col in self.cursor_x..end {
                 self.grid[self.cursor_y][col] = Cell::default_blank(self.default_fg, self.default_bg);
@@ -233,8 +236,10 @@ impl Screen {
         if self.cursor_y < self.rows && self.cursor_x < self.cols {
             let row = &mut self.grid[self.cursor_y];
             for _ in 0..count {
-                row.insert(self.cursor_x, Cell::default_blank(self.default_fg, self.default_bg));
-                row.pop();
+                if self.cursor_x <= row.len() {
+                    row.insert(self.cursor_x, Cell::default_blank(self.default_fg, self.default_bg));
+                    row.pop();
+                }
             }
         }
     }
@@ -289,6 +294,8 @@ impl Screen {
     }
 
     pub fn resize(&mut self, new_cols: usize, new_rows: usize) {
+        let new_cols = new_cols.max(1);
+        let new_rows = new_rows.max(1);
         if new_cols == self.cols && new_rows == self.rows {
             return;
         }
@@ -296,7 +303,7 @@ impl Screen {
         for y in 0..new_rows {
             let mut row = Vec::with_capacity(new_cols);
             for x in 0..new_cols {
-                if y < self.rows && x < self.cols {
+                if y < self.rows && x < self.cols && y < self.grid.len() && x < self.grid[y].len() {
                     row.push(self.grid[y][x]);
                 } else {
                     row.push(Cell::default_blank(self.default_fg, self.default_bg));
