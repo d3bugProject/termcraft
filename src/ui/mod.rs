@@ -1,5 +1,6 @@
-pub mod server;
 pub mod tabs;
 
-pub use server::TermCraftServer;
+#[cfg(windows)]
+pub mod win32_window;
+
 pub use tabs::{Tab, TabManager};

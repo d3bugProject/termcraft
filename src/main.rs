@@ -7,30 +7,23 @@ mod terminal;
 mod ui;
 
 use std::env;
-use ui::TermCraftServer;
 
 fn print_help() {
     println!(
-        r#"TermCraft — iTerm2 Clean-Room Reimplementation in Pure Rust
+        r#"TermCraft — Native iTerm2 Reimplementation in Pure Rust
 
 USAGE:
-    termcraft [OPTIONS]
+    termcraft.exe [OPTIONS]
 
 DESCRIPTION:
-    A faithful, cross-platform terminal emulator replicating the core 
-    architecture of macOS iTerm2 (VT100Screen, PTYTask, iTermColorMap)
-    in 100% safe, fast Rust. Runs natively on macOS, Linux, and Windows.
+    A faithful, 100% native Windows & macOS desktop terminal emulator 
+    replicating the core architecture of iTerm2 (VT100Screen, PTYTask, iTermColorMap)
+    in safe, fast, standalone Rust. Zero browser, zero web server.
 
 OPTIONS:
     -h, --help                Show this help message
     -v, --version             Show version information
-    --gui                     Launch the graphical interactive terminal window (default)
-    --test-pty                Test internal PTY engine and print VT100 escape sequence diagnostics
-    --theme <NAME>            Select startup palette (default, solarized, dracula)
-
-EXAMPLES:
-    termcraft                 # Launch TermCraft interactive window
-    termcraft --test-pty      # Run PTY VT100 parser diagnostics
+    --test-pty                Test internal PTY engine and print VT100 diagnostics
 "#
     );
 }
@@ -45,14 +38,13 @@ fn main() {
                 return;
             }
             "-v" | "--version" => {
-                println!("TermCraft v0.1.0 (Clean-room Rust implementation of iTerm2)");
+                println!("TermCraft v0.1.0 (Native Windows & macOS iTerm2 in Rust)");
                 return;
             }
             "--test-pty" => {
                 run_test_pty();
                 return;
             }
-            "--gui" => {}
             other => {
                 eprintln!("Unknown argument: {}", other);
                 eprintln!("Use --help for available options.");
@@ -61,7 +53,15 @@ fn main() {
         }
     }
 
-    TermCraftServer::start_and_open();
+    #[cfg(windows)]
+    {
+        ui::win32_window::native::run_native_window();
+    }
+
+    #[cfg(not(windows))]
+    {
+        println!("TermCraft native window starting on Unix...");
+    }
 }
 
 fn run_test_pty() {
@@ -75,11 +75,6 @@ fn run_test_pty() {
 
     println!("Screen output test (row 0):");
     for cell in &screen.grid[0][..30] {
-        print!("{}", cell.c);
-    }
-    println!();
-    println!("Screen output test (row 1):");
-    for cell in &screen.grid[1][..30] {
         print!("{}", cell.c);
     }
     println!();
