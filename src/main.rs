@@ -10,6 +10,10 @@ mod ui;
 use std::env;
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        let _ = std::fs::write("C:\\Users\\mnagency\\Desktop\\termcraft\\crash.log", format!("{:?}\n", info));
+    }));
+
     #[cfg(windows)]
     {
         ui::win32_window::native::run_native_window();
